@@ -13,6 +13,13 @@ const localConfigFile = "config.json"
 type Config struct {
 	Workspace string    `json:"workspace"`
 	LLM       LLMConfig `json:"llm"`
+	UI        UIConfig  `json:"ui"`
+}
+
+// UIConfig 终端界面相关可选配置。
+type UIConfig struct {
+	// LLMRunningTitle 流式生成时在时间线中展示的英文提示（如 "Generating…"）。
+	LLMRunningTitle string `json:"llm_running_title"`
 }
 
 type LLMConfig struct {
@@ -104,6 +111,9 @@ func LoadConfig(path string) (Config, error) {
 func applyRuntimeDefaults(cfg *Config) {
 	if cfg.Workspace == "" {
 		cfg.Workspace, _ = os.Getwd()
+	}
+	if cfg.UI.LLMRunningTitle == "" {
+		cfg.UI.LLMRunningTitle = "Generating…"
 	}
 	if llmAllEmpty(cfg.LLM) {
 		return

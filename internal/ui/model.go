@@ -35,13 +35,14 @@ var (
 )
 
 type model struct {
-	ctx    context.Context
-	agent  Agent
-	vp     viewport.Model
-	ti     textinput.Model
-	width  int
-	height int
-	busy   bool
+	ctx             context.Context
+	agent           Agent
+	vp              viewport.Model
+	ti              textinput.Model
+	width           int
+	height          int
+	busy            bool
+	llmRunningTitle string
 
 	turnCh <-chan agent.AgentEvent
 
@@ -51,7 +52,7 @@ type model struct {
 	streamPrefix string
 }
 
-func newModel(ctx context.Context, ag Agent) *model {
+func newModel(ctx context.Context, ag Agent, llmRunningTitle string) *model {
 	ti := textinput.New()
 	ti.Prompt = "› "
 	ti.Placeholder = "Message…  (/tools)  Enter send · Ctrl+C quit"
@@ -61,12 +62,16 @@ func newModel(ctx context.Context, ag Agent) *model {
 	vp := viewport.New(0, 0)
 	vp.SetContent(welcomeText)
 
+	if llmRunningTitle == "" {
+		llmRunningTitle = "Generating…"
+	}
 	return &model{
-		ctx:      ctx,
-		agent:    ag,
-		ti:       ti,
-		vp:       vp,
-		modelIdx: -1,
+		ctx:             ctx,
+		agent:           ag,
+		ti:              ti,
+		vp:              vp,
+		modelIdx:        -1,
+		llmRunningTitle: llmRunningTitle,
 	}
 }
 
@@ -109,16 +114,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, tea.Quit
 		}
-		if m.busy {
-			s := msg.String()
-			if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
-				idx := int(s[0] - '1')
-				if idx < len(m.blocks) {
-					m.blocks[idx].expanded = !m.blocks[idx].expanded
-					m.syncViewport()
-				}
-				return m, nil
+		if idx, ok := blockToggleIndex(msg, m.busy, m.ti.Value() == ""); ok {
+			if idx < len(m.blocks) {
+				m.blocks[idx].expanded = !m.blocks[idx].expanded
+				m.syncViewport()
 			}
+			return m, nil
+		}
+		if m.busy {
 			var cmd tea.Cmd
 			m.vp, cmd = m.vp.Update(msg)
 			return m, cmd
@@ -149,7 +152,7 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 		kind:     kindPrompt,
 		status:   statusDone,
 		body:     line,
-		expanded: false,
+		expanded: true,
 		at:       time.Now(),
 	})
 	m.ensureActiveModelBlock()
@@ -185,6 +188,7 @@ func (m *model) flushStreamToModel() {
 	m.ensureActiveModelBlock()
 	m.blocks[m.modelIdx].body = m.streamPrefix
 	m.blocks[m.modelIdx].status = statusDone
+	m.blocks[m.modelIdx].expanded = true
 	m.modelIdx = -1
 	m.streaming = false
 	m.streamPrefix = ""
@@ -211,6 +215,7 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 			m.blocks[m.modelIdx].body = ev.Text
 		}
 		m.blocks[m.modelIdx].status = statusDone
+		m.blocks[m.modelIdx].expanded = true
 		m.modelIdx = -1
 
 	case agent.EventKindTool:
@@ -220,7 +225,7 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 			title:    ev.ToolName,
 			status:   statusDone,
 			body:     ev.Detail,
-			expanded: false,
+			expanded: defaultExpandedForTool(ev.Detail),
 			at:       time.Now(),
 		})
 		m.modelIdx = -1
@@ -231,7 +236,7 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 			kind:     kindInfo,
 			status:   statusDone,
 			body:     ev.Text,
-			expanded: false,
+			expanded: true,
 			at:       time.Now(),
 		})
 
@@ -248,11 +253,12 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 
 	default:
 		m.flushStreamToModel()
+		body := fmt.Sprintf("%+v", ev)
 		m.blocks = append(m.blocks, feedBlock{
 			kind:     kindInfo,
 			status:   statusDone,
-			body:     fmt.Sprintf("%+v", ev),
-			expanded: false,
+			body:     body,
+			expanded: true,
 			at:       time.Now(),
 		})
 	}
@@ -264,7 +270,9 @@ func (m *model) syncViewport() {
 		w = 80
 	}
 	streaming := m.streaming && m.streamPrefix != ""
-	s := renderFeed(w, m.blocks, welcomeText, streaming, m.streamPrefix)
+	feed := renderFeed(w, m.blocks, welcomeText, streaming, m.streamPrefix, m.llmRunningTitle)
+	// Logo 放在 viewport 内与对话一起滚动，避免「Logo 在区外 + vp 高度按整屏算」导致总高度溢出、滚轮只带动局部。
+	s := LogoHeader(w) + "\n\n" + feed
 	m.vp.SetContent(s)
 	m.vp.GotoBottom()
 }
@@ -275,8 +283,6 @@ func (m *model) View() string {
 	}
 	rule := strings.Repeat("─", m.width)
 	var b strings.Builder
-	b.WriteString(LogoHeader(m.width))
-	b.WriteString("\n\n")
 	b.WriteString(m.vp.View())
 	b.WriteString("\n")
 	b.WriteString(rule)
@@ -285,10 +291,31 @@ func (m *model) View() string {
 	b.WriteString("\n")
 	b.WriteString(rule)
 	b.WriteString("\n")
-	help := "Enter send · wheel scroll · 1-9 toggle section · Ctrl+C quit"
+	help := "Enter send · wheel scroll · Alt+1-9 toggle block · 1-9 when busy or input empty · Ctrl+C quit"
 	if len(m.blocks) == 0 {
 		help = "Enter send · wheel scroll · Ctrl+C quit"
 	}
 	b.WriteString(styleHelp.Render(help))
 	return b.String()
+}
+
+// blockToggleIndex 解析折叠时间线块的按键：Alt+1..9 在任意时刻可用；纯数字 1..9 仅在
+// agent 运行中或输入框为空时可用（否则应输入到消息里）。
+func blockToggleIndex(msg tea.KeyMsg, busy bool, inputEmpty bool) (int, bool) {
+	k := tea.Key(msg)
+	if k.Type != tea.KeyRunes || len(k.Runes) != 1 {
+		return 0, false
+	}
+	r := k.Runes[0]
+	if r < '1' || r > '9' {
+		return 0, false
+	}
+	idx := int(r - '1')
+	if k.Alt {
+		return idx, true
+	}
+	if busy || inputEmpty {
+		return idx, true
+	}
+	return 0, false
 }

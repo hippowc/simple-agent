@@ -1,29 +1,112 @@
 # simple-agent
 
-一个 Go 版本的简化 LLM Agent 项目骨架，目标是模仿 Claude Code 的核心分层。
+在终端里使用的简易 LLM Agent：对话界面 + 可调用本地工具（读/写文件、搜索、执行 shell 等），配置兼容 OpenAI 协议 API。
 
-## 模块结构
+---
 
-- `cmd/simple-agent`：程序入口（加载配置、启动 UI）；LLM 与 Tools 的组装在 `agent` 内完成。
-- `internal/ui`：终端 UI（[Bubble Tea](https://github.com/charmbracelet/bubbletea)）：上方主区可滚动，底部单行输入，仅调用 `agent`。
-- `internal/agent`：Agent 主循环与调度（LLM 调用、Tools 调用、结果返回 UI）。
-- `internal/llm`：LLM 抽象与实现（当前实现 OpenAI 协议）。
-- `internal/tools`：工具抽象与实现（`read_file` / `write_file`；`find_files` 基于 [doublestar](https://github.com/bmatcuk/doublestar) glob；`grep_content` 正则搜索；`run_shell` 在工作区下执行命令）。
-- `internal/common`：公共能力（配置加载与写入）。
+## 环境要求
 
-## 快速开始
+- 已安装 **Go**（本仓库 `go.mod` 为 **1.26.1**，建议使用同主版本或兼容的较新 Go）。
 
-1. 配置 `config.json`（首次运行会自动生成默认配置）。
-2. 设置 `llm.api_key`。
-3. 运行：
+---
+
+## 获取与运行
 
 ```bash
+git clone <你的仓库地址> simple-agent
+cd simple-agent
 go run ./cmd/simple-agent
 ```
 
-## 当前 TUI 内置命令
+首次若尚无配置文件，程序会在用户目录下创建空配置模板，见下文「配置文件放哪里」。
 
-- `/tools`：查看工具列表
-- `/read <path>`：读取文件
-- `/write <path> <content>`：写入文件
-- `quit` / `exit`：退出
+---
+
+## 配置 API 与工作区
+
+### 配置文件放哪里（优先级从高到低）
+
+1. **当前工作目录**下的 `config.json`（适合按项目单独配置）。
+2. 用户目录 **`%USERPROFILE%\.simple-agent\config\config.json`**（Windows）或 **`~/.simple-agent/config/config.json`**（Unix）。
+
+若两处都不存在，会在 **用户目录** 自动创建一份空模板，你需要编辑并至少填写 **`llm.api_key`**（以及按需改模型、地址等）。
+
+### 常用字段说明
+
+| 字段 | 含义 |
+|------|------|
+| `workspace` | 工具默认工作目录（读文件、写文件、`run_shell` 的 cwd 等）。留空则使用启动时的当前目录。 |
+| `llm.provider` | 当前实现按 OpenAI 风格客户端使用，一般填 `openai`。 |
+| `llm.base_url` | API 根地址，例如 `https://api.openai.com/v1` 或兼容网关地址。 |
+| `llm.api_key` | 密钥。 |
+| `llm.model` | 模型名，例如 `gpt-4o-mini`。 |
+| `ui.llm_running_title` | 可选；流式输出时时间线里显示的提示文案（默认 `Generating…`）。 |
+
+示例（请按需修改，勿提交真实密钥）：
+
+```json
+{
+  "workspace": "C:/path/to/your/project",
+  "llm": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "YOUR_KEY",
+    "model": "gpt-4o-mini"
+  },
+  "ui": {
+    "llm_running_title": "Generating…"
+  }
+}
+```
+
+保存后，在 **配置所在目录或项目根** 下执行 `go run ./cmd/simple-agent`，或把 `workspace` 指到你的代码目录。
+
+### 编译成可执行文件
+
+```bash
+go build -o simple-agent ./cmd/simple-agent
+```
+
+将生成的 `simple-agent` 与 `config.json` 放在同一目录，或依赖用户目录下的全局配置。
+
+---
+
+## 在终端里怎么用
+
+1. 启动后出现 Logo 与加载条，就绪后进入对话界面。
+2. 在底部 **`›`** 后输入内容，**Enter** 发送。
+3. 用 **鼠标滚轮** 或 **PgUp / PgDn** 在主区域滚动查看长回复。
+4. **Ctrl+C** 退出；或在输入框发送 **`quit`** / **`exit`**。
+
+### 内置命令（以 `/` 开头）
+
+在输入框中整行发送：
+
+| 命令 | 作用 |
+|------|------|
+| `/tools` | 列出当前注册的工具名称。 |
+| `/read <path>` | 读取工作区内的文件。 |
+| `/write <path> <content>` | 写入文件；`content` 为该行剩余全部文本。 |
+
+其他需求交给模型，由模型通过工具调用完成（具体工具集见源码 `internal/tools`）。
+
+### 折叠时间线块
+
+对带工具调用等可折叠块，可用 **Alt+1～9** 切换第 1～9 个块的展开/折叠；在 Agent 运行中或输入框为空时，也可用 **1～9**（无 Alt）快速切换。
+
+更细的界面说明（布局、按键与配置项）见 **[`internal/ui/README.md`](internal/ui/README.md)**。
+
+---
+
+## 仓库结构（概览）
+
+| 路径 | 作用 |
+|------|------|
+| `cmd/simple-agent` | 程序入口：加载配置、启动 TUI。 |
+| `internal/ui` | 终端 UI。 |
+| `internal/agent` | 对话回合与 LLM/工具编排。 |
+| `internal/llm` | LLM 客户端抽象与 OpenAI 协议实现。 |
+| `internal/tools` | 工具注册与实现。 |
+| `internal/common` | 配置加载与默认值。 |
+
+Agent 内部设计见 **[`internal/agent/README.md`](internal/agent/README.md)**。

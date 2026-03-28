@@ -44,7 +44,7 @@ func (a *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Fprintf(os.Stderr, "init agent failed: %v\n", msg.Err)
 			return a, tea.Quit
 		}
-		a.child = newModel(a.ctx, msg.Agent)
+		a.child = newModel(a.ctx, msg.Agent, a.cfg.UI.LLMRunningTitle)
 		var cmds []tea.Cmd
 		cmds = append(cmds, a.child.Init())
 		if a.win.Width > 0 {
