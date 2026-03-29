@@ -13,13 +13,6 @@ const localConfigFile = "config.json"
 type Config struct {
 	Workspace string    `json:"workspace"`
 	LLM       LLMConfig `json:"llm"`
-	UI        UIConfig  `json:"ui"`
-}
-
-// UIConfig 终端界面相关可选配置。
-type UIConfig struct {
-	// LLMRunningTitle 流式生成时在时间线中展示的英文提示（如 "Generating…"）。
-	LLMRunningTitle string `json:"llm_running_title"`
 }
 
 type LLMConfig struct {
@@ -27,6 +20,10 @@ type LLMConfig struct {
 	BaseURL  string `json:"base_url"`
 	APIKey   string `json:"api_key"`
 	Model    string `json:"model"`
+	// Stream 为 nil 时默认 true（chat 流式 + 聚合 tool_calls）；设为 false 则使用非流式 Generate。
+	Stream *bool `json:"stream,omitempty"`
+	// ContextWindowTokens 模型上下文窗口上限（token），用于 UI 显示上下文占用百分比。0 表示不展示百分比。
+	ContextWindowTokens int `json:"context_window_tokens,omitempty"`
 }
 
 // DefaultConfig 返回带有一套合理默认值的配置（可用于本地模板或测试）。
@@ -112,9 +109,6 @@ func applyRuntimeDefaults(cfg *Config) {
 	if cfg.Workspace == "" {
 		cfg.Workspace, _ = os.Getwd()
 	}
-	if cfg.UI.LLMRunningTitle == "" {
-		cfg.UI.LLMRunningTitle = "Generating…"
-	}
 	if llmAllEmpty(cfg.LLM) {
 		return
 	}
@@ -126,6 +120,10 @@ func applyRuntimeDefaults(cfg *Config) {
 	}
 	if cfg.LLM.Model == "" {
 		cfg.LLM.Model = "gpt-4o-mini"
+	}
+	if cfg.LLM.Stream == nil {
+		t := true
+		cfg.LLM.Stream = &t
 	}
 }
 

@@ -7,23 +7,22 @@
 | 文件 | 职责 |
 |------|------|
 | `run.go` | 启动壳：进度条、`tea.Program`、进入主界面。 |
-| `model.go` | Bubble Tea `Model`：`Update`/`View`、`handleKey`/`submit`、`syncViewport`（拼 Logo + 时间线）。 |
+| `model.go` | Bubble Tea `Model`：`Update`/`View`、`handleKey`/`submit`、`syncViewport`（时间线内容）。 |
 | `model_events.go` | `AgentEvent` → `feedBlock` / 流式缓冲（`applyAgentEvent` 等）。 |
 | `feed.go` | 时间线数据：`feedBlock`、`blockKind`、折叠与工具名等纯辅助。 |
 | `timeline.go` | 时间线视图：lipgloss 样式与 `renderFeed`（纯渲染，无 Tea）。 |
 | `input.go` | 键盘：折叠块序号解析（`blockToggleIndex`）。 |
-| `logo.go` | 顶部 Logo。 |
 | `tui.go` | `Agent` 接口（便于测试注入）。 |
 
 ## 启动流程
 
-1. 全屏进入备用屏（`AltScreen`），显示 Logo 与初始化进度条。
+1. 全屏进入备用屏（`AltScreen`），显示初始化进度条。
 2. 后台完成 `Agent` 构造后，切换到主界面：上方可滚动时间线 + 底部输入框。
 
 ## 界面布局
 
-- **主区（viewport）**：顶部品牌区（Logo）与对话时间线在同一可滚动区域内，长内容时整块一起滚动，避免与底栏错位。
-- **底栏**：分隔线、单行输入（`›` 提示符）、再一条分隔线、底部帮助文案。
+- **主区（viewport）**：对话时间线可滚动，长内容时整块一起滚动，避免与底栏错位。
+- **底栏**：分隔线、单行输入（`›` 提示符）、再一条分隔线、**用量行**（session 累计 token、上一轮 prompt+completion、上下文百分比，百分比需 `config.json` 中 `llm.context_window_tokens`）、帮助文案。
 
 ## 操作方式
 
@@ -48,6 +47,13 @@
 
 更完整的 Agent 与工具行为见 [`internal/agent/README.md`](../agent/README.md)。
 
-## 配置对界面的影响
+## 文案
 
-`config.json` 中 **`ui.llm_running_title`**：流式生成时，时间线里展示的英文提示文案（默认 `Generating…`）。
+界面英文文案内置在 **`common.DefaultUIText()`**（`internal/common/ui_text.go`），不提供外部配置文件。
+
+## 等待与 loading
+
+- **忙碌态**：使用 [bubbles/spinner](https://github.com/charmbracelet/bubbles/tree/master/spinner)，当前为 **`Dot`**（Braille 点阵）；与 `waitAgentEvent` 并行，由 `spinner.TickMsg` 驱动刷新。
+- **模型**：非流式且尚无正文时，仅显示 spinner（无额外标题/提示句）。流式且缓冲为空时，在**流式轨**上只显示 spinner；有缓冲时显示缓冲 + 光标。
+- **仅工具、无对话文本**：空模型块直接收口为完成态，正文为空（无占位说明句）。
+- **工具**：`ToolStart` 后正文为 spinner + 工具友好名；收到 **`EventKindTool`** 后合并为结果。

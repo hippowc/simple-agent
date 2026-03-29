@@ -31,8 +31,12 @@ func NewFromConfig(cfg common.Config) (*Agent, error) {
 		return nil, err
 	}
 	store := NewMessageStore()
+	streamLLM := true
+	if cfg.LLM.Stream != nil {
+		streamLLM = *cfg.LLM.Stream
+	}
 	return &Agent{
-		session: newSessionRuntime(store, client, cfg.LLM.Model, systemPrompt, reg),
+		session: newSessionRuntime(store, client, cfg.LLM.Model, systemPrompt, reg, streamLLM, cfg.LLM.ContextWindowTokens),
 	}, nil
 }
 
@@ -41,6 +45,9 @@ func registerDefaultTools(reg *tools.Registry, workspace string) error {
 		return err
 	}
 	if err := reg.Register(tools.NewWriteFileTool(workspace)); err != nil {
+		return err
+	}
+	if err := reg.Register(tools.NewEditFileTool(workspace)); err != nil {
 		return err
 	}
 	if err := reg.Register(tools.NewFindFilesTool(workspace)); err != nil {

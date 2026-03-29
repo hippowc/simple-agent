@@ -46,6 +46,35 @@ func OpenAIToolDefinitions() []llm.ToolDefinition {
 		{
 			Type: "function",
 			Function: llm.FunctionSchema{
+				Name:        "edit_file",
+				Description: "Replace old_string with new_string in an existing file under the workspace. By default old_string must occur exactly once; set replace_all to replace every occurrence. Literal substring match (not regex). Use new_string empty to delete the matched span.",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"path": map[string]interface{}{
+							"type":        "string",
+							"description": "File path relative to workspace or absolute within workspace.",
+						},
+						"old_string": map[string]interface{}{
+							"type":        "string",
+							"description": "Exact text to find (must be unique unless replace_all is true).",
+						},
+						"new_string": map[string]interface{}{
+							"type":        "string",
+							"description": "Replacement text; may be empty to remove old_string.",
+						},
+						"replace_all": map[string]interface{}{
+							"type":        "boolean",
+							"description": "If true, replace every occurrence of old_string; if false (default), require exactly one match.",
+						},
+					},
+					"required": []string{"path", "old_string", "new_string"},
+				},
+			},
+		},
+		{
+			Type: "function",
+			Function: llm.FunctionSchema{
 				Name:        "find_files",
 				Description: "Find files under a directory whose paths match a glob (e.g. **/*.go). Paths use / separators relative to root.",
 				Parameters: map[string]interface{}{

@@ -31,7 +31,7 @@ const foldLineThreshold = 3
 // headerRailTimeGap 标题行中竖线与时间戳之间的空隙（单空格）。
 const headerRailTimeGap = " "
 
-// feedBlock 单条时间线；title 仅存工具原始名，展示用 toolFriendlyName(title)。
+// feedBlock 单条时间线；title 仅存工具原始名，展示用 toolFriendlyName（见 UIText.ToolDisplayNames）。
 type feedBlock struct {
 	kind     blockKind
 	title    string
@@ -41,16 +41,11 @@ type feedBlock struct {
 	at       time.Time
 }
 
-func toolFriendlyName(name string) string {
-	m := map[string]string{
-		"read_file":    "读文件",
-		"write_file":   "写文件",
-		"find_files":   "查找",
-		"grep_content": "搜索",
-		"run_shell":    "终端",
-	}
-	if s, ok := m[name]; ok {
-		return s
+func toolFriendlyName(name string, display map[string]string) string {
+	if display != nil {
+		if s, ok := display[name]; ok && s != "" {
+			return s
+		}
 	}
 	return strings.ReplaceAll(name, "_", " ")
 }

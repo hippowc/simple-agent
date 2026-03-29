@@ -20,6 +20,10 @@ func (n *toolNode) Run(ctx context.Context, exec *turnExecution) error {
 	calls := exec.loop.lastLLMResp.ToolCalls
 	exec.turn.transcript.appendAssistantToolCalls(calls)
 	for _, call := range calls {
+		name := strings.TrimSpace(call.Function.Name)
+		if name != "" {
+			sendAgentEvent(ctx, exec.out, AgentEvent{Kind: EventKindToolStart, ToolName: name})
+		}
 		res := n.runOne(ctx, call)
 		exec.turn.transcript.appendToolMessage(res.ToolMessage)
 		sendAgentEvent(ctx, exec.out, AgentEvent{Kind: EventKindTool, ToolName: res.Name, Detail: res.Detail})

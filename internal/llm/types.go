@@ -43,10 +43,18 @@ type Request struct {
 	Tools    []ToolDefinition
 }
 
+// Usage 为单次补全的 token 用量（若服务端未返回则为零值）。
+type Usage struct {
+	PromptTokens     int
+	CompletionTokens int
+	TotalTokens      int
+}
+
 type Response struct {
 	Content      string
 	ToolCalls    []ToolCall
 	FinishReason string
+	Usage        Usage
 }
 
 // StreamChunk 表示流式响应中的一条：Text 为增量文本；Err 非空表示流失败（含提前取消）。
@@ -59,4 +67,10 @@ type Client interface {
 	Generate(ctx context.Context, req Request) (Response, error)
 	// GenerateStream 以流式方式请求补全，通过只读 channel 逐段返回增量；channel 关闭表示正常结束。
 	GenerateStream(ctx context.Context, req Request) (<-chan StreamChunk, error)
+}
+
+// StreamingClient 可选能力：流式请求并在服务端聚合为与非流式 Generate 等价的 Response；
+// onContent 收到正文增量（不含 tool_calls 拼接逻辑）。未实现的 Provider 仍走 Generate。
+type StreamingClient interface {
+	GenerateStreaming(ctx context.Context, req Request, onContent func(delta string) error) (Response, error)
 }

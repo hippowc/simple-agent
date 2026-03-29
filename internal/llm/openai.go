@@ -45,6 +45,11 @@ type openAIChatResponse struct {
 		FinishReason string  `json:"finish_reason"`
 		Message      Message `json:"message"`
 	} `json:"choices"`
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
+	} `json:"usage,omitempty"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
@@ -95,10 +100,17 @@ func (c *OpenAIClient) Generate(ctx context.Context, req Request) (Response, err
 	}
 
 	ch := result.Choices[0]
+	var u Usage
+	if result.Usage != nil {
+		u.PromptTokens = result.Usage.PromptTokens
+		u.CompletionTokens = result.Usage.CompletionTokens
+		u.TotalTokens = result.Usage.TotalTokens
+	}
 	return Response{
 		Content:      ch.Message.Content,
 		ToolCalls:    ch.Message.ToolCalls,
 		FinishReason: ch.FinishReason,
+		Usage:        u,
 	}, nil
 }
 

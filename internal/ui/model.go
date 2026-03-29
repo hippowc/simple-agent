@@ -2,21 +2,22 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"simple-agent/internal/agent"
+	"simple-agent/internal/common"
 )
 
-const welcomeText = "Ready.\n\nSend a message or a /command. Scroll with wheel or PgUp/PgDn."
-
-// footerLines：底栏占用行数（分隔线、输入、分隔线、帮助），用于计算 viewport 高度。
-const footerLines = 6
+// footerLines：底栏占用行数（分隔线、输入、分隔线、用量行、帮助），用于计算 viewport 高度。
+const footerLines = 7
 
 type agentEventMsg struct{ ev agent.AgentEvent }
 
@@ -34,45 +35,58 @@ func waitAgentEvent(ch <-chan agent.AgentEvent) tea.Cmd {
 
 var styleHelp = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
-// model：Bubble Tea 状态机。输入条 + 可滚动主区；业务数据主要是 blocks 与 LLM 流式缓冲。
+// newSpinner 使用 bubbles 的 Dot（Braille 点阵，紧凑清晰）。
+func newSpinner() spinner.Model {
+	return spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("241"))),
+	)
+}
+
+// model：Bubble Tea 状态机。输入条 + 可滚动主区；忙碌时用 bubbles/spinner 作 loading。
 type model struct {
-	ctx             context.Context
-	agent           Agent
-	vp              viewport.Model
-	ti              textinput.Model
-	width           int
-	height          int
-	busy            bool
-	llmRunningTitle string
+	ctx    context.Context
+	agent  Agent
+	uiText common.UIText
+	vp     viewport.Model
+	ti     textinput.Model
+	spin   spinner.Model
+	width  int
+	height int
+	busy   bool
 
 	turnCh <-chan agent.AgentEvent
 
 	blocks       []feedBlock
-	modelIdx     int  // 当前打开的 kindModel 块下标；-1 表示无
-	streaming    bool // LLM 流式片段是否写入 streamPrefix
+	modelIdx     int
+	streaming    bool
 	streamPrefix string
+
+	sessionTokens    int64
+	lastPromptToks   int
+	lastCompletion   int
+	contextPct       float64 // <0：不显示百分比
 }
 
-func newModel(ctx context.Context, ag Agent, llmRunningTitle string) *model {
+func newModel(ctx context.Context, ag Agent, ui common.UIText) *model {
 	ti := textinput.New()
 	ti.Prompt = "› "
-	ti.Placeholder = "Message…  (/tools)  Enter send · Ctrl+C quit"
+	ti.Placeholder = ui.InputPlaceholder
 	ti.Focus()
 	ti.CharLimit = 0
 
 	vp := viewport.New(0, 0)
-	vp.SetContent(welcomeText)
+	vp.SetContent(ui.WelcomeMarkdown)
 
-	if llmRunningTitle == "" {
-		llmRunningTitle = "Generating…"
-	}
 	return &model{
-		ctx:             ctx,
-		agent:           ag,
-		ti:              ti,
-		vp:              vp,
-		modelIdx:        -1,
-		llmRunningTitle: llmRunningTitle,
+		ctx:    ctx,
+		agent:  ag,
+		uiText: ui,
+		ti:     ti,
+		vp:     vp,
+		spin:   newSpinner(),
+		modelIdx:   -1,
+		contextPct: -1,
 	}
 }
 
@@ -107,7 +121,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.streaming = false
 		m.streamPrefix = ""
+		m.spin = newSpinner()
 		return m, nil
+
+	case spinner.TickMsg:
+		if !m.busy {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		m.syncViewport()
+		return m, cmd
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
@@ -163,8 +187,9 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	m.syncViewport()
 
 	m.busy = true
+	m.spin = newSpinner()
 	m.turnCh = m.agent.RunTurn(m.ctx, line)
-	return m, waitAgentEvent(m.turnCh)
+	return m, tea.Batch(waitAgentEvent(m.turnCh), func() tea.Msg { return m.spin.Tick() })
 }
 
 func (m *model) syncViewport() {
@@ -172,16 +197,18 @@ func (m *model) syncViewport() {
 	if w <= 0 {
 		w = 80
 	}
-	streaming := m.streaming && m.streamPrefix != ""
-	feed := renderFeed(w, m.blocks, welcomeText, streaming, m.streamPrefix, m.llmRunningTitle)
-	s := LogoHeader(w) + "\n\n" + feed
-	m.vp.SetContent(s)
+	spinView := ""
+	if m.busy {
+		spinView = m.spin.View()
+	}
+	feed := renderFeed(w, m.blocks, m.streaming, m.streamPrefix, m.uiText, spinView)
+	m.vp.SetContent(feed)
 	m.vp.GotoBottom()
 }
 
 func (m *model) View() string {
 	if m.width == 0 {
-		return "Loading…"
+		return m.uiText.ViewLoading
 	}
 	rule := strings.Repeat("─", m.width)
 	var b strings.Builder
@@ -193,9 +220,18 @@ func (m *model) View() string {
 	b.WriteString("\n")
 	b.WriteString(rule)
 	b.WriteString("\n")
-	help := "Enter send · wheel scroll · Alt+1-9 toggle block · 1-9 when busy or input empty · Ctrl+C quit"
+	ctxStr := "—"
+	if m.contextPct >= 0 {
+		// 窗口很大（如 200k）时整数百分比长期为 0%/1%，保留两位小数便于观察
+		ctxStr = fmt.Sprintf("%.2f%%", m.contextPct)
+	}
+	stats := fmt.Sprintf("session %d tok · last %d+%d · ctx %s",
+		m.sessionTokens, m.lastPromptToks, m.lastCompletion, ctxStr)
+	b.WriteString(styleHelp.Render(stats))
+	b.WriteString("\n")
+	help := m.uiText.HelpWithBlocks
 	if len(m.blocks) == 0 {
-		help = "Enter send · wheel scroll · Ctrl+C quit"
+		help = m.uiText.HelpNoBlocks
 	}
 	b.WriteString(styleHelp.Render(help))
 	return b.String()

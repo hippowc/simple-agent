@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"simple-agent/internal/agent"
@@ -40,6 +41,19 @@ func (m *model) flushStreamToModel() {
 	m.streamPrefix = ""
 }
 
+func (m *model) finalizeEmptyRunningModel() {
+	for i := len(m.blocks) - 1; i >= 0; i-- {
+		b := &m.blocks[i]
+		if b.kind == kindModel && b.status == statusRunning && strings.TrimSpace(b.body) == "" {
+			b.body = ""
+			b.status = statusDone
+			b.expanded = true
+			break
+		}
+	}
+	m.modelIdx = -1
+}
+
 func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 	switch ev.Kind {
 	case agent.EventKindLLM:
@@ -54,7 +68,11 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 		}
 		m.ensureActiveModelBlock()
 		if m.streaming {
-			m.blocks[m.modelIdx].body = m.streamPrefix + ev.Text
+			if strings.TrimSpace(ev.Text) != "" {
+				m.blocks[m.modelIdx].body = ev.Text
+			} else {
+				m.blocks[m.modelIdx].body = m.streamPrefix
+			}
 			m.streaming = false
 			m.streamPrefix = ""
 		} else {
@@ -64,8 +82,32 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 		m.blocks[m.modelIdx].expanded = true
 		m.modelIdx = -1
 
+	case agent.EventKindToolStart:
+		m.flushStreamToModel()
+		m.finalizeEmptyRunningModel()
+		m.blocks = append(m.blocks, feedBlock{
+			kind:     kindTool,
+			title:    ev.ToolName,
+			status:   statusRunning,
+			body:     "",
+			expanded: true,
+			at:       time.Now(),
+		})
+		m.modelIdx = -1
+
 	case agent.EventKindTool:
 		m.flushStreamToModel()
+		n := len(m.blocks)
+		if n > 0 {
+			last := &m.blocks[n-1]
+			if last.kind == kindTool && last.status == statusRunning && last.title == ev.ToolName {
+				last.body = ev.Detail
+				last.status = statusDone
+				last.expanded = defaultExpandedForTool(ev.Detail)
+				m.modelIdx = -1
+				return
+			}
+		}
 		m.blocks = append(m.blocks, feedBlock{
 			kind:     kindTool,
 			title:    ev.ToolName,
@@ -96,6 +138,13 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 			at:       time.Now(),
 		})
 		m.modelIdx = -1
+
+	case agent.EventKindUsage:
+		m.sessionTokens = ev.SessionTokenTotal
+		m.lastPromptToks = ev.LastPromptTokens
+		m.lastCompletion = ev.LastCompletionTokens
+		m.contextPct = ev.ContextPercent
+		return
 
 	default:
 		m.flushStreamToModel()

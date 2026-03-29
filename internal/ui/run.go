@@ -27,10 +27,11 @@ type bootTickMsg struct{}
 type bootStartLoadMsg struct{}
 
 type appModel struct {
-	ctx   context.Context
-	cfg   common.Config
-	child tea.Model
-	win   tea.WindowSizeMsg
+	ctx    context.Context
+	cfg    common.Config
+	uiText common.UIText
+	child  tea.Model
+	win    tea.WindowSizeMsg
 }
 
 func (a *appModel) Init() tea.Cmd {
@@ -44,7 +45,7 @@ func (a *appModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Fprintf(os.Stderr, "init agent failed: %v\n", msg.Err)
 			return a, tea.Quit
 		}
-		a.child = newModel(a.ctx, msg.Agent, a.cfg.UI.LLMRunningTitle)
+		a.child = newModel(a.ctx, msg.Agent, a.uiText)
 		var cmds []tea.Cmd
 		cmds = append(cmds, a.child.Init())
 		if a.win.Width > 0 {
@@ -68,18 +69,19 @@ func (a *appModel) View() string {
 
 type bootModel struct {
 	cfg    common.Config
+	uiText common.UIText
 	width  int
 	height int
 	prog   progress.Model
 }
 
-func newBootModel(cfg common.Config) *bootModel {
+func newBootModel(cfg common.Config, ui common.UIText) *bootModel {
 	p := progress.New(
 		progress.WithDefaultGradient(),
 		progress.WithoutPercentage(),
 		progress.WithWidth(40),
 	)
-	return &bootModel{cfg: cfg, prog: p}
+	return &bootModel{cfg: cfg, uiText: ui, prog: p}
 }
 
 func (b *bootModel) Init() tea.Cmd {
@@ -145,19 +147,19 @@ func (b *bootModel) View() string {
 	if h <= 0 {
 		h = 24
 	}
-	logo := LogoHeader(w)
 	bar := b.prog.View()
-	hint := styleDim.Render("正在初始化，请稍候…")
-	block := logo + "\n\n" + bar + "\n\n" + hint
+	hint := styleDim.Render(b.uiText.BootInitializing)
+	block := bar + "\n\n" + hint
 	return lipgloss.Place(w, h, lipgloss.Center, lipgloss.Center, block)
 }
 
 // Run 先全屏显示启动进度条并异步初始化 Agent，就绪后进入对话界面。
-func Run(ctx context.Context, cfg common.Config, in io.Reader, out io.Writer) error {
+func Run(ctx context.Context, cfg common.Config, ui common.UIText, in io.Reader, out io.Writer) error {
 	root := &appModel{
-		ctx:   ctx,
-		cfg:   cfg,
-		child: newBootModel(cfg),
+		ctx:    ctx,
+		cfg:    cfg,
+		uiText: ui,
+		child:  newBootModel(cfg, ui),
 	}
 	p := tea.NewProgram(root,
 		tea.WithContext(ctx),

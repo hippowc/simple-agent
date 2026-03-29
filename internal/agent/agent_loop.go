@@ -13,7 +13,11 @@ const maxLLMCallsPerTurn = 16
 type turnTerminator struct{}
 
 func (turnTerminator) successWithText(ctx context.Context, exec *turnExecution) {
-	sendAgentEvent(ctx, exec.out, AgentEvent{Kind: EventKindLLM, Text: exec.loop.lastLLMResp.Content, Partial: false})
+	text := exec.loop.lastLLMResp.Content
+	if exec.loop.lastLLMStreamed {
+		text = ""
+	}
+	sendAgentEvent(ctx, exec.out, AgentEvent{Kind: EventKindLLM, Text: text, Partial: false})
 	exec.turn.session.store.AppendFrom(exec.turn.transcript.msgs, exec.turn.transcript.commitFrom)
 }
 

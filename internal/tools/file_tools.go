@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +75,74 @@ func (t *WriteFileTool) Call(_ context.Context, input CallInput) (string, error)
 		return "", err
 	}
 	return "ok", nil
+}
+
+// EditFileTool 在已存在文件中将唯一匹配的原文片段替换为新内容（或 replace_all 时替换全部）。
+type EditFileTool struct {
+	workspace string
+}
+
+func NewEditFileTool(workspace string) *EditFileTool {
+	return &EditFileTool{workspace: workspace}
+}
+
+func (t *EditFileTool) Name() string { return "edit_file" }
+
+func (t *EditFileTool) Description() string {
+	return "Edit an existing file by replacing old_string with new_string. Without replace_all, old_string must appear exactly once."
+}
+
+func (t *EditFileTool) Call(_ context.Context, input CallInput) (string, error) {
+	target, ok := input.Arguments["path"]
+	if !ok || target == "" {
+		return "", errors.New("path is required")
+	}
+	oldStr, ok := input.Arguments["old_string"]
+	if !ok {
+		return "", errors.New("old_string is required")
+	}
+	if oldStr == "" {
+		return "", errors.New("old_string must not be empty")
+	}
+	newStr := input.Arguments["new_string"]
+
+	resolved, err := resolvePath(t.workspace, target)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", err
+	}
+	content := string(data)
+
+	replaceAll := parseArgBool(input.Arguments["replace_all"])
+	var out string
+	if replaceAll {
+		out = strings.ReplaceAll(content, oldStr, newStr)
+	} else {
+		n := strings.Count(content, oldStr)
+		switch n {
+		case 0:
+			return "", errors.New("old_string not found in file")
+		case 1:
+			out = strings.Replace(content, oldStr, newStr, 1)
+		default:
+			return "", fmt.Errorf("old_string matches %d times; must be unique, or set replace_all to true", n)
+		}
+	}
+	if out == content {
+		return "ok (no changes)", nil
+	}
+	if err := os.WriteFile(resolved, []byte(out), 0o644); err != nil {
+		return "", err
+	}
+	return "ok", nil
+}
+
+func parseArgBool(s string) bool {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return s == "true" || s == "1" || s == "yes"
 }
 
 func resolvePath(workspace, target string) (string, error) {

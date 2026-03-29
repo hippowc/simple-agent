@@ -18,7 +18,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := ui.Run(ctx, cfg, os.Stdin, os.Stdout); err != nil {
+	if err := ui.Run(ctx, cfg, common.DefaultUIText(), os.Stdin, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "tui exited with error: %v\n", err)
 		os.Exit(1)
 	}

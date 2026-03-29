@@ -1,6 +1,6 @@
 # simple-agent
 
-在终端里使用的简易 LLM Agent：对话界面 + 可调用本地工具（读/写文件、搜索、执行 shell 等），配置兼容 OpenAI 协议 API。
+在终端里使用的简易 LLM Agent：对话界面 + 可调用本地工具（读/写/改文件、搜索、执行 shell 等），配置兼容 OpenAI 协议 API。
 
 ---
 
@@ -40,7 +40,10 @@ go run ./cmd/simple-agent
 | `llm.base_url` | API 根地址，例如 `https://api.openai.com/v1` 或兼容网关地址。 |
 | `llm.api_key` | 密钥。 |
 | `llm.model` | 模型名，例如 `gpt-4o-mini`。 |
-| `ui.llm_running_title` | 可选；流式输出时时间线里显示的提示文案（默认 `Generating…`）。 |
+| `llm.stream` | 可选；`true`（默认）使用 **chat 流式 + 聚合 tool_calls**；`false` 使用单次非流式请求。 |
+| `llm.context_window_tokens` | 可选；模型上下文窗口上限（token），用于 TUI 底部显示 **上下文占用百分比**。`0` 或不写则百分比处显示 `—`（仍会显示 session / last 用量）。 |
+
+流式请求会带上 `stream_options.include_usage` 以尽量从 API 读取 token；若你所用的兼容网关不支持该字段，可能返回错误，此时可将 **`llm.stream`** 设为 **`false`** 走非流式，或换用支持该选项的端点。
 
 示例（请按需修改，勿提交真实密钥）：
 
@@ -51,15 +54,11 @@ go run ./cmd/simple-agent
     "provider": "openai",
     "base_url": "https://api.openai.com/v1",
     "api_key": "YOUR_KEY",
-    "model": "gpt-4o-mini"
-  },
-  "ui": {
-    "llm_running_title": "Generating…"
+    "model": "gpt-4o-mini",
+    "context_window_tokens": 128000
   }
 }
 ```
-
-保存后，在 **配置所在目录或项目根** 下执行 `go run ./cmd/simple-agent`，或把 `workspace` 指到你的代码目录。
 
 ### 编译成可执行文件
 
@@ -73,7 +72,7 @@ go build -o simple-agent ./cmd/simple-agent
 
 ## 在终端里怎么用
 
-1. 启动后出现 Logo 与加载条，就绪后进入对话界面。
+1. 启动后出现加载条，就绪后进入对话界面。
 2. 在底部 **`›`** 后输入内容，**Enter** 发送。
 3. 用 **鼠标滚轮** 或 **PgUp / PgDn** 在主区域滚动查看长回复。
 4. **Ctrl+C** 退出；或在输入框发送 **`quit`** / **`exit`**。

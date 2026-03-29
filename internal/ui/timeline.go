@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"simple-agent/internal/common"
 )
 
 // 本文件：时间线视图的 lipgloss 样式与纯渲染函数（无 Tea 状态）。
@@ -29,7 +31,6 @@ var (
 			BorderForeground(lipgloss.Color("238")).
 			Padding(0, 1)
 
-	styleLLMRunning = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
 )
 
 func railStyle(kind blockKind, st blockStatus) lipgloss.Style {
@@ -77,14 +78,14 @@ func indentEachLine(s string, spaces int) string {
 	return strings.Join(lines, "\n")
 }
 
-func formatExpandedBody(blk *feedBlock, contentW int) string {
+func formatExpandedBody(blk *feedBlock, contentW int, ui common.UIText) string {
 	body := strings.TrimRight(blk.body, "\n")
 	if body == "" {
 		return ""
 	}
 	switch blk.kind {
 	case kindTool:
-		return formatToolBody(contentW, body)
+		return formatToolBody(contentW, body, ui.ToolOutputHeader)
 	case kindError:
 		return formatErrorBody(contentW, body)
 	default:
@@ -92,9 +93,9 @@ func formatExpandedBody(blk *feedBlock, contentW int) string {
 	}
 }
 
-func formatToolBody(contentW int, body string) string {
+func formatToolBody(contentW int, body string, outputHeader string) string {
 	var b strings.Builder
-	b.WriteString(styleDim.Render("· 输出"))
+	b.WriteString(styleDim.Render(outputHeader))
 	b.WriteString("\n")
 	b.WriteString(styleBody.Render(lipgloss.NewStyle().Width(contentW).Render(body)))
 	return b.String()
@@ -114,16 +115,16 @@ func formatErrorBody(contentW int, body string) string {
 	return first + "\n" + restR
 }
 
-func foldKeyHintBracket(blockIndex1 int) string {
-	h := foldKeyHint(blockIndex1)
+func foldKeyHintBracket(blockIndex1 int, ui common.UIText) string {
+	h := foldKeyHint(blockIndex1, ui)
 	return styleDim.Render(" [" + h + "]")
 }
 
-func foldKeyHint(blockIndex1 int) string {
+func foldKeyHint(blockIndex1 int, ui common.UIText) string {
 	if blockIndex1 >= 1 && blockIndex1 <= 9 {
-		return fmt.Sprintf("alt + %d to expand", blockIndex1)
+		return fmt.Sprintf(ui.FoldExpandAltFmt, blockIndex1)
 	}
-	return "alt + 1-9 to expand"
+	return ui.FoldExpandAltRange
 }
 
 func renderUserBlock(blk *feedBlock, width int) string {
@@ -188,18 +189,18 @@ func renderUserBlock(blk *feedBlock, width int) string {
 	return b.String()
 }
 
-func renderStandardBlock(blk *feedBlock, width int, blockIndex1 int) string {
+func renderStandardBlock(blk *feedBlock, width int, blockIndex1 int, ui common.UIText, spinView string, streamGlobal bool) string {
 	rail := railMark(blk.kind, blk.status)
 	tsStyled := styleTS.Render(tsFmt(blk.at))
 
 	var label string
 	switch blk.kind {
 	case kindTool:
-		label = styleLbl.Render(toolFriendlyName(blk.title))
+		label = styleLbl.Render(toolFriendlyName(blk.title, ui.ToolDisplayNames))
 	case kindInfo:
-		label = styleLbl.Render("提示")
+		label = styleLbl.Render(ui.LabelInfo)
 	case kindError:
-		label = styleLbl.Render("失败")
+		label = styleLbl.Render(ui.LabelError)
 	}
 
 	var hb strings.Builder
@@ -222,10 +223,20 @@ func renderStandardBlock(blk *feedBlock, width int, blockIndex1 int) string {
 
 	switch blk.kind {
 	case kindTool:
-		b.WriteString(renderToolOutput(blk, contentW, blockIndex1))
+		b.WriteString(renderToolOutput(blk, contentW, blockIndex1, spinView, ui))
+	case kindModel:
+		if blk.status == statusRunning && strings.TrimSpace(blk.body) == "" {
+			if !streamGlobal && spinView != "" {
+				b.WriteString(indentEachLine(styleDim.Render("  ")+spinView, 2))
+				b.WriteString("\n")
+			}
+		} else if strings.TrimSpace(blk.body) != "" {
+			b.WriteString(indentEachLine(formatExpandedBody(blk, contentW, ui), 2))
+			b.WriteString("\n")
+		}
 	default:
 		if strings.TrimSpace(blk.body) != "" {
-			b.WriteString(indentEachLine(formatExpandedBody(blk, contentW), 2))
+			b.WriteString(indentEachLine(formatExpandedBody(blk, contentW, ui), 2))
 			b.WriteString("\n")
 		}
 	}
@@ -234,14 +245,23 @@ func renderStandardBlock(blk *feedBlock, width int, blockIndex1 int) string {
 	return b.String()
 }
 
-func renderToolOutput(blk *feedBlock, contentW int, blockIndex1 int) string {
+func renderToolLoading(blk *feedBlock, spinView string, ui common.UIText) string {
+	name := toolFriendlyName(blk.title, ui.ToolDisplayNames)
+	line := styleDim.Render("  ") + spinView + "  " + styleBody.Render(name)
+	return indentEachLine(line, 2) + "\n"
+}
+
+func renderToolOutput(blk *feedBlock, contentW int, blockIndex1 int, spinView string, ui common.UIText) string {
+	if blk.status == statusRunning && strings.TrimSpace(blk.body) == "" {
+		return renderToolLoading(blk, spinView, ui)
+	}
 	body := strings.TrimRight(blk.body, "\n")
 	if body == "" {
 		return ""
 	}
 	fold := isToolFoldable(blk)
 	if fold && !blk.expanded {
-		br := foldKeyHintBracket(blockIndex1)
+		br := foldKeyHintBracket(blockIndex1, ui)
 		pm := contentW - lipgloss.Width(br) - 1
 		if pm < 4 {
 			pm = 4
@@ -249,17 +269,12 @@ func renderToolOutput(blk *feedBlock, contentW int, blockIndex1 int) string {
 		line := styleDim.Render(oneLinePreview(body, pm)) + br
 		return indentEachLine(line, 2) + "\n"
 	}
-	return indentEachLine(formatToolBody(contentW, body), 2) + "\n"
+	return indentEachLine(formatToolBody(contentW, body, ui.ToolOutputHeader), 2) + "\n"
 }
 
-// renderFeed 将内存中的块渲染为可放入 viewport 的字符串。
-// 流式片段：在已有块之后追加「进行中」轨与缓冲正文（与 kindModel 占位块配合）。
-func renderFeed(width int, blocks []feedBlock, welcome string, streaming bool, streamBuf string, llmRunningTitle string) string {
+func renderFeed(width int, blocks []feedBlock, streaming bool, streamBuf string, ui common.UIText, spinView string) string {
 	if len(blocks) == 0 {
-		return styleDim.Render(welcome)
-	}
-	if llmRunningTitle == "" {
-		llmRunningTitle = "Generating…"
+		return styleDim.Render(ui.WelcomeMarkdown)
 	}
 	var b strings.Builder
 	for i := range blocks {
@@ -268,18 +283,18 @@ func renderFeed(width int, blocks []feedBlock, welcome string, streaming bool, s
 		if blk.kind == kindPrompt {
 			b.WriteString(renderUserBlock(blk, width))
 		} else {
-			b.WriteString(renderStandardBlock(blk, width, idx1))
+			b.WriteString(renderStandardBlock(blk, width, idx1, ui, spinView, streaming))
 		}
 	}
-	if streaming && streamBuf != "" {
+	if streaming {
 		b.WriteString(railModelHi.Render("┃"))
 		b.WriteString(headerRailTimeGap)
-		b.WriteString(styleLLMRunning.Render(llmRunningTitle))
-		b.WriteString("\n")
-		b.WriteString(railModelHi.Render("┃"))
-		b.WriteString(headerRailTimeGap)
-		b.WriteString(styleBody.Render(streamBuf))
-		b.WriteString(styleDim.Render("▌"))
+		if strings.TrimSpace(streamBuf) != "" {
+			b.WriteString(styleBody.Render(streamBuf))
+			b.WriteString(styleDim.Render("▌"))
+		} else if spinView != "" {
+			b.WriteString(spinView)
+		}
 		b.WriteString("\n")
 	}
 	return b.String()

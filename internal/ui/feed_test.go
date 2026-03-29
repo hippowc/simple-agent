@@ -1,6 +1,10 @@
 package ui
 
-import "testing"
+import (
+	"testing"
+
+	"simple-agent/internal/common"
+)
 
 func TestLineCount(t *testing.T) {
 	tests := []struct {
@@ -31,10 +35,11 @@ func TestDefaultExpandedForTool(t *testing.T) {
 }
 
 func TestToolFriendlyName(t *testing.T) {
-	if got := toolFriendlyName("read_file"); got != "读文件" {
+	names := common.DefaultUIText().ToolDisplayNames
+	if got := toolFriendlyName("read_file", names); got != "Read file" {
 		t.Errorf("read_file -> %q", got)
 	}
-	if got := toolFriendlyName("unknown_thing"); got != "unknown thing" {
+	if got := toolFriendlyName("unknown_thing", names); got != "unknown thing" {
 		t.Errorf("unknown_thing -> %q", got)
 	}
 }
