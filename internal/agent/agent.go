@@ -2,7 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strings"
+	"sync"
 
 	"simple-agent/internal/builtin"
 	"simple-agent/internal/common"
@@ -13,31 +16,83 @@ import (
 // Agent 是运行时实体：持有会话级 sessionRuntime，并对外提供统一入口（如 RunTurn）。
 // 后续扩展子 Agent 时，调度逻辑也应集中在此包内。
 type Agent struct {
-	session *sessionRuntime
+	mu         sync.RWMutex
+	session    *sessionRuntime
+	cfg        common.Config
+	configPath string
 }
 
 // NewFromConfig 根据配置创建 LLM 客户端、注册默认工具，并返回可用的 Agent。
-func NewFromConfig(cfg common.Config) (*Agent, error) {
-	client, err := llm.NewClient(cfg.LLM)
+// configPath 为持久化路径（用户目录或当前目录下的 config.json），供 /model、/prompt 保存；可为空则内置命令无法写盘。
+func NewFromConfig(cfg common.Config, configPath string) (*Agent, error) {
+	cfgCopy, err := common.CloneConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	prof, err := cfgCopy.ActiveLLMProfile()
+	if err != nil {
+		return nil, err
+	}
+	client, err := llm.NewClient(prof.LLMConfig)
+	if err != nil {
+		return nil, err
+	}
+	wd, err := os.Getwd()
 	if err != nil {
 		return nil, err
 	}
 	reg := tools.NewRegistry()
-	if err := registerDefaultTools(reg, cfg.Workspace); err != nil {
+	if err := registerDefaultTools(reg, wd); err != nil {
 		return nil, err
 	}
-	systemPrompt, err := common.LoadSystemPromptAuto()
+	systemPrompt, err := common.ResolveSystemPrompt(cfgCopy.Prompt)
+	if err != nil {
+		return nil, err
+	}
+	userPromptTpl, err := common.ResolveUserPromptTemplate(cfgCopy.Prompt)
 	if err != nil {
 		return nil, err
 	}
 	store := NewMessageStore()
 	streamLLM := true
-	if cfg.LLM.Stream != nil {
-		streamLLM = *cfg.LLM.Stream
+	if prof.Stream != nil {
+		streamLLM = *prof.Stream
 	}
+	sess := newSessionRuntime(store, client, prof.Model, systemPrompt, userPromptTpl, reg, streamLLM, prof.ContextWindowTokens)
 	return &Agent{
-		session: newSessionRuntime(store, client, cfg.LLM.Model, systemPrompt, reg, streamLLM, cfg.LLM.ContextWindowTokens),
+		session:    sess,
+		cfg:        cfgCopy,
+		configPath: configPath,
 	}, nil
+}
+
+func (a *Agent) applySessionFromConfigUnlocked(cfg common.Config) error {
+	prof, err := cfg.ActiveLLMProfile()
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(prof.BaseURL) == "" || strings.TrimSpace(prof.APIKey) == "" || strings.TrimSpace(prof.Model) == "" {
+		return fmt.Errorf("active profile needs base_url, api_key, and model")
+	}
+	client, err := llm.NewClient(prof.LLMConfig)
+	if err != nil {
+		return err
+	}
+	systemPrompt, err := common.ResolveSystemPrompt(cfg.Prompt)
+	if err != nil {
+		return err
+	}
+	userTpl, err := common.ResolveUserPromptTemplate(cfg.Prompt)
+	if err != nil {
+		return err
+	}
+	streamLLM := true
+	if prof.Stream != nil {
+		streamLLM = *prof.Stream
+	}
+	a.session.replaceLLM(client, prof.Model, streamLLM, prof.ContextWindowTokens)
+	a.session.setPrompts(systemPrompt, userTpl)
+	return nil
 }
 
 func registerDefaultTools(reg *tools.Registry, workspace string) error {
@@ -91,6 +146,12 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, out chan<- AgentE
 	}
 
 	if strings.HasPrefix(userInput, "/") {
+		if outs, ok := a.tryConfigSlashCommands(ctx, userInput); ok {
+			for _, o := range outs {
+				sendAgentEvent(ctx, out, builtinOutputToAgentEvent(o))
+			}
+			return
+		}
 		res := builtin.Dispatch(ctx, userInput, builtin.Deps{
 			Registry: a.session.tools,
 			Store:    a.session.store,
@@ -101,7 +162,20 @@ func (a *Agent) runTurn(ctx context.Context, userInput string, out chan<- AgentE
 			}
 			return
 		}
+		sendAgentEvent(ctx, out, AgentEvent{
+			Kind:   EventKindError,
+			Detail: fmt.Sprintf("unknown command %s — built-ins: /model, /prompt, /tools, /quit. Omit leading / to talk to the model.", slashCommandSummary(userInput)),
+		})
+		return
 	}
 
 	a.runAgentLoop(ctx, userInput, out)
+}
+
+func slashCommandSummary(line string) string {
+	f := strings.Fields(line)
+	if len(f) == 0 {
+		return line
+	}
+	return f[0]
 }

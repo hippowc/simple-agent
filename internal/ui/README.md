@@ -35,15 +35,14 @@
 | **1～9**（无 Alt） | 在 **Agent 运行中**，或 **输入框为空** 时，切换第 1～9 个块的折叠；否则数字作为普通输入。 |
 | **Ctrl+C** | 退出程序。 |
 
-文本形式的退出：`quit` 或 `exit`（发送后退出）。
+文本形式的退出：`quit`、`exit` 或 `/quit`（发送后退出）。**Ctrl+C** 也可退出；**Ctrl+V** 用于粘贴（由输入框默认处理，未单独拦截）。
 
 ## 内置斜杠命令
 
-由 Agent 侧 `builtin.Dispatch` 处理，在输入框中发送以 `/` 开头的行即可（与对 LLM 的自然语言输入共用同一入口）：
+以 `/` 开头的行会优先尝试 **`/model`、`/prompt`**（由 Agent 处理）与 **`/tools`**（`builtin.Dispatch`）。无法识别的 `/…` **不会**调用模型，只显示错误提示。读/写文件请用自然语言让模型调工具。
 
 - `/tools` — 列出已注册工具名。
-- `/read <path>` — 读文件（相对路径相对 **工作区**）。
-- `/write <path> <content>` — 写文件；`<content>` 为剩余整段文本。
+- `/model` …、`/prompt` … — 见主 README 与代码内命令说明。
 
 更完整的 Agent 与工具行为见 [`internal/agent/README.md`](../agent/README.md)。
 

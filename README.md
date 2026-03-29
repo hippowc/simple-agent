@@ -22,7 +22,9 @@ go run ./cmd/simple-agent
 
 ---
 
-## 配置 API 与工作区
+## 配置 API
+
+工具（读/写/搜索/shell 等）的默认工作目录为 **启动 simple-agent 时的当前工作目录**；请在目标项目目录下执行 `go run` 或在该目录运行可执行文件。
 
 ### 配置文件放哪里（优先级从高到低）
 
@@ -35,27 +37,29 @@ go run ./cmd/simple-agent
 
 | 字段 | 含义 |
 |------|------|
-| `workspace` | 工具默认工作目录（读文件、写文件、`run_shell` 的 cwd 等）。留空则使用启动时的当前目录。 |
-| `llm.provider` | 当前实现按 OpenAI 风格客户端使用，一般填 `openai`。 |
-| `llm.base_url` | API 根地址，例如 `https://api.openai.com/v1` 或兼容网关地址。 |
-| `llm.api_key` | 密钥。 |
-| `llm.model` | 模型名，例如 `gpt-4o-mini`。 |
-| `llm.stream` | 可选；`true`（默认）使用 **chat 流式 + 聚合 tool_calls**；`false` 使用单次非流式请求。 |
-| `llm.context_window_tokens` | 可选；模型上下文窗口上限（token），用于 TUI 底部显示 **上下文占用百分比**。`0` 或不写则百分比处显示 `—`（仍会显示 session / last 用量）。 |
+| `llm.use` | 当前使用的 profile 的 **`name`**（与 `profiles[].name` 对应）。 |
+| `llm.profiles` | 多组连接；每项含 `name`、`provider`、`base_url`、`api_key`、`model` 等。 |
+| `llm.profiles[].stream` | 可选；`true`（默认）使用 **chat 流式 + 聚合 tool_calls**；`false` 使用单次非流式请求。 |
+| `llm.profiles[].context_window_tokens` | 可选；模型上下文窗口上限（token），用于 TUI 底部显示 **上下文占用百分比**。`0` 或不写则百分比处显示 `—`（仍会显示 session / last 用量）。 |
 
-流式请求会带上 `stream_options.include_usage` 以尽量从 API 读取 token；若你所用的兼容网关不支持该字段，可能返回错误，此时可将 **`llm.stream`** 设为 **`false`** 走非流式，或换用支持该选项的端点。
+流式请求会带上 `stream_options.include_usage` 以尽量从 API 读取 token；若你所用的兼容网关不支持该字段，可能返回错误，此时可将对应 profile 的 **`stream`** 设为 **`false`** 走非流式，或换用支持该选项的端点。
 
 示例（请按需修改，勿提交真实密钥）：
 
 ```json
 {
-  "workspace": "C:/path/to/your/project",
   "llm": {
-    "provider": "openai",
-    "base_url": "https://api.openai.com/v1",
-    "api_key": "YOUR_KEY",
-    "model": "gpt-4o-mini",
-    "context_window_tokens": 128000
+    "use": "default",
+    "profiles": [
+      {
+        "name": "default",
+        "provider": "openai",
+        "base_url": "https://api.openai.com/v1",
+        "api_key": "YOUR_KEY",
+        "model": "gpt-4o-mini",
+        "context_window_tokens": 128000
+      }
+    ]
   }
 }
 ```
@@ -75,17 +79,18 @@ go build -o simple-agent ./cmd/simple-agent
 1. 启动后出现加载条，就绪后进入对话界面。
 2. 在底部 **`›`** 后输入内容，**Enter** 发送。
 3. 用 **鼠标滚轮** 或 **PgUp / PgDn** 在主区域滚动查看长回复。
-4. **Ctrl+C** 退出；或在输入框发送 **`quit`** / **`exit`**。
+4. **Ctrl+C** 退出；或在输入框发送 **`quit`** / **`exit`** / **`/quit`**。
 
 ### 内置命令（以 `/` 开头）
 
-在输入框中整行发送：
+在输入框中整行发送。以 `/` 开头且未识别的命令**不会**调用模型，会提示未知命令；读/写文件请用自然语言让模型调用工具（例如「read X」），而不是 `/read`。
 
 | 命令 | 作用 |
 |------|------|
+| `/model` … | 查看/切换/新增 LLM 配置（见程序内说明）。 |
+| `/prompt` … | 配置 system/user 提示（见程序内说明）。 |
 | `/tools` | 列出当前注册的工具名称。 |
-| `/read <path>` | 读取工作区内的文件。 |
-| `/write <path> <content>` | 写入文件；`content` 为该行剩余全部文本。 |
+| `/quit` | 退出 TUI（与 `quit` / `exit` 相同）。 |
 
 其他需求交给模型，由模型通过工具调用完成（具体工具集见源码 `internal/tools`）。
 

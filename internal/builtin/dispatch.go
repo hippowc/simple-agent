@@ -2,12 +2,8 @@ package builtin
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"strings"
-
-	"simple-agent/internal/tools"
 )
 
 // Kind 表示内置命令产生的一条输出类别。
@@ -34,18 +30,13 @@ type Outcome struct {
 	Outputs []Output
 }
 
-// Dispatch 处理以 `/` 开头的内置命令；若非内置命令或无需处理则 Handled=false。
-func Dispatch(ctx context.Context, input string, deps Deps) Outcome {
+// Dispatch 处理以 `/` 开头的内置命令（不含通过 agent 注册的 /model、/prompt）。
+// 读/写文件请通过自然语言让模型调用工具，而非伪造成内置命令。
+func Dispatch(_ context.Context, input string, deps Deps) Outcome {
 	if deps.Registry == nil {
 		return Outcome{}
 	}
 
-	if strings.HasPrefix(input, "/read ") {
-		return dispatchRead(ctx, input, deps)
-	}
-	if strings.HasPrefix(input, "/write ") {
-		return dispatchWrite(ctx, input, deps)
-	}
 	if input == "/tools" {
 		return Outcome{
 			Handled: true,
@@ -57,63 +48,4 @@ func Dispatch(ctx context.Context, input string, deps Deps) Outcome {
 	}
 
 	return Outcome{}
-}
-
-func dispatchRead(ctx context.Context, input string, deps Deps) Outcome {
-	path := strings.TrimSpace(strings.TrimPrefix(input, "/read "))
-	result, err := deps.Registry.Call(ctx, "read_file", tools.CallInput{
-		Arguments: map[string]string{"path": path},
-	})
-	if err != nil {
-		return Outcome{
-			Handled: true,
-			Outputs: []Output{{Kind: KindError, Err: err.Error()}},
-		}
-	}
-	argsJSON, _ := json.Marshal(map[string]string{"path": path})
-	if deps.Store != nil {
-		deps.Store.RecordToolInvocation(input, newToolCallID(), "read_file", string(argsJSON), result)
-	}
-	return Outcome{
-		Handled: true,
-		Outputs: []Output{{Kind: KindTool, ToolName: "read_file", Detail: result}},
-	}
-}
-
-func dispatchWrite(ctx context.Context, input string, deps Deps) Outcome {
-	parts := strings.SplitN(strings.TrimPrefix(input, "/write "), " ", 2)
-	if len(parts) < 2 {
-		return Outcome{
-			Handled: true,
-			Outputs: []Output{{Kind: KindError, Err: "write format: /write <path> <content>"}},
-		}
-	}
-	path := strings.TrimSpace(parts[0])
-	content := parts[1]
-	result, err := deps.Registry.Call(ctx, "write_file", tools.CallInput{
-		Arguments: map[string]string{
-			"path":    path,
-			"content": content,
-		},
-	})
-	if err != nil {
-		return Outcome{
-			Handled: true,
-			Outputs: []Output{{Kind: KindError, Err: err.Error()}},
-		}
-	}
-	argsJSON, _ := json.Marshal(map[string]string{"path": path, "content": content})
-	if deps.Store != nil {
-		deps.Store.RecordToolInvocation(input, newToolCallID(), "write_file", string(argsJSON), result)
-	}
-	return Outcome{
-		Handled: true,
-		Outputs: []Output{{Kind: KindTool, ToolName: "write_file", Detail: result}},
-	}
-}
-
-func newToolCallID() string {
-	var b [10]byte
-	_, _ = rand.Read(b[:])
-	return fmt.Sprintf("call_%x", b)
 }

@@ -11,6 +11,7 @@ type UIText struct {
 	LabelError         string
 	ToolOutputHeader   string
 	BootInitializing   string
+	CompletionHint     string
 	FoldExpandAltFmt   string
 	FoldExpandAltRange string
 	ToolDisplayNames   map[string]string
@@ -20,14 +21,15 @@ type UIText struct {
 func DefaultUIText() UIText {
 	return UIText{
 		WelcomeMarkdown:    "Ready.\n\nSend a message or a /command. Scroll with wheel or PgUp/PgDn.",
-		InputPlaceholder:   "Message…  (/tools)  Enter send · Ctrl+C quit",
-		HelpWithBlocks:     "Enter send · wheel scroll · Alt+1-9 toggle block · 1-9 when busy or input empty · Ctrl+C quit",
-		HelpNoBlocks:       "Enter send · wheel scroll · Ctrl+C quit",
+		InputPlaceholder:   "Msg · /model /prompt /tools /quit · Enter · Ctrl+C",
+		HelpWithBlocks:     "Enter · scroll · Alt+1–9 · Ctrl+C",
+		HelpNoBlocks:       "Enter · scroll · Ctrl+C",
 		ViewLoading:        "Loading…",
 		LabelInfo:          "Note",
 		LabelError:         "Error",
 		ToolOutputHeader:   "· output",
 		BootInitializing:   "Initializing, please wait…",
+		CompletionHint:     "↑↓ · Tab · Esc",
 		FoldExpandAltFmt:   "alt + %d to expand",
 		FoldExpandAltRange: "alt + 1-9 to expand",
 		ToolDisplayNames: map[string]string{

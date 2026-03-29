@@ -120,6 +120,8 @@ func (m *model) applyAgentEvent(ev agent.AgentEvent) {
 
 	case agent.EventKindInfo:
 		m.flushStreamToModel()
+		m.finalizeEmptyRunningModel()
+		m.modelIdx = -1
 		m.blocks = append(m.blocks, feedBlock{
 			kind:     kindInfo,
 			status:   statusDone,

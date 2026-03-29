@@ -68,20 +68,21 @@ func (a *appModel) View() string {
 }
 
 type bootModel struct {
-	cfg    common.Config
-	uiText common.UIText
-	width  int
-	height int
-	prog   progress.Model
+	cfg        common.Config
+	configPath string
+	uiText     common.UIText
+	width      int
+	height     int
+	prog       progress.Model
 }
 
-func newBootModel(cfg common.Config, ui common.UIText) *bootModel {
+func newBootModel(cfg common.Config, configPath string, ui common.UIText) *bootModel {
 	p := progress.New(
 		progress.WithDefaultGradient(),
 		progress.WithoutPercentage(),
 		progress.WithWidth(40),
 	)
-	return &bootModel{cfg: cfg, uiText: ui, prog: p}
+	return &bootModel{cfg: cfg, configPath: configPath, uiText: ui, prog: p}
 }
 
 func (b *bootModel) Init() tea.Cmd {
@@ -98,7 +99,7 @@ func (b *bootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return b, tea.Batch(
 			b.prog.SetPercent(0.18),
 			func() tea.Msg {
-				ag, err := agent.NewFromConfig(b.cfg)
+				ag, err := agent.NewFromConfig(b.cfg, b.configPath)
 				return agentInitMsg{Agent: ag, Err: err}
 			},
 			tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg { return bootTickMsg{} }),
@@ -154,12 +155,12 @@ func (b *bootModel) View() string {
 }
 
 // Run 先全屏显示启动进度条并异步初始化 Agent，就绪后进入对话界面。
-func Run(ctx context.Context, cfg common.Config, ui common.UIText, in io.Reader, out io.Writer) error {
+func Run(ctx context.Context, cfg common.Config, configPath string, ui common.UIText, in io.Reader, out io.Writer) error {
 	root := &appModel{
 		ctx:    ctx,
 		cfg:    cfg,
 		uiText: ui,
-		child:  newBootModel(cfg, ui),
+		child:  newBootModel(cfg, configPath, ui),
 	}
 	p := tea.NewProgram(root,
 		tea.WithContext(ctx),
