@@ -2,6 +2,19 @@
 
 终端对话界面：基于 [Bubble Tea](https://github.com/charmbracelet/bubbletea) 与 [bubbles](https://github.com/charmbracelet/bubbles)（`viewport`、`textinput`）。入口为 **`ui.Run`**，由 `cmd/simple-agent` 调用；界面只通过 **`Agent`** 接口驱动 agent，不直接依赖 LLM 或工具实现。
 
+## 代码结构（按职责）
+
+| 文件 | 职责 |
+|------|------|
+| `run.go` | 启动壳：进度条、`tea.Program`、进入主界面。 |
+| `model.go` | Bubble Tea `Model`：`Update`/`View`、`handleKey`/`submit`、`syncViewport`（拼 Logo + 时间线）。 |
+| `model_events.go` | `AgentEvent` → `feedBlock` / 流式缓冲（`applyAgentEvent` 等）。 |
+| `feed.go` | 时间线数据：`feedBlock`、`blockKind`、折叠与工具名等纯辅助。 |
+| `timeline.go` | 时间线视图：lipgloss 样式与 `renderFeed`（纯渲染，无 Tea）。 |
+| `input.go` | 键盘：折叠块序号解析（`blockToggleIndex`）。 |
+| `logo.go` | 顶部 Logo。 |
+| `tui.go` | `Agent` 接口（便于测试注入）。 |
+
 ## 启动流程
 
 1. 全屏进入备用屏（`AltScreen`），显示 Logo 与初始化进度条。

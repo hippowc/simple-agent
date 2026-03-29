@@ -4,98 +4,17 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 )
 
-type blockKind int
-
-const (
-	kindPrompt blockKind = iota
-	kindModel
-	kindTool
-	kindInfo
-	kindError
-)
-
-type blockStatus int
-
-const (
-	statusRunning blockStatus = iota
-	statusDone
-	statusError
-)
-
-// foldLineThreshold 仅用于工具：超过此行数则默认折叠。
-const foldLineThreshold = 3
-
-// headerRailTimeGap 标题行中竖线与时间戳之间的空隙，与 renderStandardBlock / 流式行一致（单空格）。
-const headerRailTimeGap = " "
-
-// feedBlock 时间线块；title 仅存工具原始名，展示用 toolFriendlyName(title)。
-type feedBlock struct {
-	kind     blockKind
-	title    string
-	status   blockStatus
-	body     string
-	expanded bool
-	at       time.Time
-}
-
-func toolFriendlyName(name string) string {
-	m := map[string]string{
-		"read_file":    "读文件",
-		"write_file":   "写文件",
-		"find_files":   "查找",
-		"grep_content": "搜索",
-		"run_shell":    "终端",
-	}
-	if s, ok := m[name]; ok {
-		return s
-	}
-	return strings.ReplaceAll(name, "_", " ")
-}
-
-func lineCount(s string) int {
-	s = strings.TrimRight(s, "\n")
-	if strings.TrimSpace(s) == "" {
-		return 0
-	}
-	return strings.Count(s, "\n") + 1
-}
-
-// isToolFoldable 仅工具块在行数超过阈值时可折叠。
-func isToolFoldable(blk *feedBlock) bool {
-	return blk != nil && blk.kind == kindTool && lineCount(blk.body) > foldLineThreshold
-}
-
-// defaultExpandedForTool 工具新块：行数不超过阈值则默认展开。
-func defaultExpandedForTool(body string) bool {
-	return lineCount(body) <= foldLineThreshold
-}
-
-func oneLinePreview(s string, maxRunes int) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	if utf8.RuneCountInString(s) <= maxRunes {
-		return s
-	}
-	rs := []rune(s)
-	if len(rs) > maxRunes {
-		return string(rs[:maxRunes]) + "…"
-	}
-	return s
-}
+// 本文件：时间线视图的 lipgloss 样式与纯渲染函数（无 Tea 状态）。
 
 var (
-	styleDim  = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	styleBody = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	styleLbl  = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
-	styleTS   = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	// 用户输出区：无背景，字色略淡
+	styleDim    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	styleBody   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	styleLbl    = lipgloss.NewStyle().Foreground(lipgloss.Color("248"))
+	styleTS     = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
 	styleUserText = lipgloss.NewStyle().Foreground(lipgloss.Color("246"))
 
 	railUser    = lipgloss.NewStyle().Foreground(lipgloss.Color("60"))
@@ -103,9 +22,8 @@ var (
 	railModelHi = lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
 	railTool    = lipgloss.NewStyle().Foreground(lipgloss.Color("179"))
 	railInfo    = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
-	railErr = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	railErr     = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
 
-	// 用户气泡：仅描边，无背景色
 	userOutline = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("238")).
@@ -208,7 +126,6 @@ func foldKeyHint(blockIndex1 int) string {
 	return "alt + 1-9 to expand"
 }
 
-// renderUserBlock：标题区右侧为「时间戳 + 与工具/LLM 相同的单空格 + ┃」，┃ 贴行尾；输出区右缘与时间戳右缘对齐。
 func renderUserBlock(blk *feedBlock, width int) string {
 	body := strings.TrimRight(blk.body, "\n")
 	if body == "" {
@@ -217,7 +134,6 @@ func renderUserBlock(blk *feedBlock, width int) string {
 
 	tsPart := styleTS.Render(tsFmt(blk.at))
 	railPart := railUser.Render("┃")
-	// 与 renderStandardBlock 中 ┃ + " " + 时间 一致：此处为 时间 + " " + ┃，竖线贴最右、无尾随空格
 	strip := tsPart + headerRailTimeGap + railPart
 	stripW := lipgloss.Width(strip)
 	padW := width - stripW
@@ -318,7 +234,6 @@ func renderStandardBlock(blk *feedBlock, width int, blockIndex1 int) string {
 	return b.String()
 }
 
-// renderToolOutput 工具正文仅在输出区；折叠时摘要与中括号按键提示在输出区。
 func renderToolOutput(blk *feedBlock, contentW int, blockIndex1 int) string {
 	body := strings.TrimRight(blk.body, "\n")
 	if body == "" {
@@ -337,6 +252,8 @@ func renderToolOutput(blk *feedBlock, contentW int, blockIndex1 int) string {
 	return indentEachLine(formatToolBody(contentW, body), 2) + "\n"
 }
 
+// renderFeed 将内存中的块渲染为可放入 viewport 的字符串。
+// 流式片段：在已有块之后追加「进行中」轨与缓冲正文（与 kindModel 占位块配合）。
 func renderFeed(width int, blocks []feedBlock, welcome string, streaming bool, streamBuf string, llmRunningTitle string) string {
 	if len(blocks) == 0 {
 		return styleDim.Render(welcome)

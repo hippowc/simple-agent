@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -15,6 +14,9 @@ import (
 )
 
 const welcomeText = "Ready.\n\nSend a message or a /command. Scroll with wheel or PgUp/PgDn."
+
+// footerLines：底栏占用行数（分隔线、输入、分隔线、帮助），用于计算 viewport 高度。
+const footerLines = 6
 
 type agentEventMsg struct{ ev agent.AgentEvent }
 
@@ -30,10 +32,9 @@ func waitAgentEvent(ch <-chan agent.AgentEvent) tea.Cmd {
 	}
 }
 
-var (
-	styleHelp = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
-)
+var styleHelp = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 
+// model：Bubble Tea 状态机。输入条 + 可滚动主区；业务数据主要是 blocks 与 LLM 流式缓冲。
 type model struct {
 	ctx             context.Context
 	agent           Agent
@@ -47,8 +48,8 @@ type model struct {
 	turnCh <-chan agent.AgentEvent
 
 	blocks       []feedBlock
-	modelIdx     int
-	streaming    bool
+	modelIdx     int  // 当前打开的 kindModel 块下标；-1 表示无
+	streaming    bool // LLM 流式片段是否写入 streamPrefix
 	streamPrefix string
 }
 
@@ -82,8 +83,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		const fixedLines = 6
-		vpH := msg.Height - fixedLines
+		vpH := msg.Height - footerLines
 		if vpH < 5 {
 			vpH = 5
 		}
@@ -110,32 +110,36 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-		}
-		if idx, ok := blockToggleIndex(msg, m.busy, m.ti.Value() == ""); ok {
-			if idx < len(m.blocks) {
-				m.blocks[idx].expanded = !m.blocks[idx].expanded
-				m.syncViewport()
-			}
-			return m, nil
-		}
-		if m.busy {
-			var cmd tea.Cmd
-			m.vp, cmd = m.vp.Update(msg)
-			return m, cmd
-		}
-		if msg.String() == "enter" {
-			return m.submit()
-		}
-		var cmd tea.Cmd
-		m.ti, cmd = m.ti.Update(msg)
-		return m, cmd
+		return m.handleKey(msg)
 
 	default:
 		return m, nil
 	}
+}
+
+func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	}
+	if idx, ok := blockToggleIndex(msg, m.busy, m.ti.Value() == ""); ok {
+		if idx < len(m.blocks) {
+			m.blocks[idx].expanded = !m.blocks[idx].expanded
+			m.syncViewport()
+		}
+		return m, nil
+	}
+	if m.busy {
+		var cmd tea.Cmd
+		m.vp, cmd = m.vp.Update(msg)
+		return m, cmd
+	}
+	if msg.String() == "enter" {
+		return m.submit()
+	}
+	var cmd tea.Cmd
+	m.ti, cmd = m.ti.Update(msg)
+	return m, cmd
 }
 
 func (m *model) submit() (tea.Model, tea.Cmd) {
@@ -163,107 +167,6 @@ func (m *model) submit() (tea.Model, tea.Cmd) {
 	return m, waitAgentEvent(m.turnCh)
 }
 
-func (m *model) ensureActiveModelBlock() {
-	need := m.modelIdx < 0
-	if !need && m.modelIdx < len(m.blocks) {
-		b := m.blocks[m.modelIdx]
-		need = b.kind != kindModel || b.status == statusDone
-	}
-	if need {
-		m.blocks = append(m.blocks, feedBlock{
-			kind:     kindModel,
-			status:   statusRunning,
-			body:     "",
-			expanded: true,
-			at:       time.Now(),
-		})
-		m.modelIdx = len(m.blocks) - 1
-	}
-}
-
-func (m *model) flushStreamToModel() {
-	if !m.streaming {
-		return
-	}
-	m.ensureActiveModelBlock()
-	m.blocks[m.modelIdx].body = m.streamPrefix
-	m.blocks[m.modelIdx].status = statusDone
-	m.blocks[m.modelIdx].expanded = true
-	m.modelIdx = -1
-	m.streaming = false
-	m.streamPrefix = ""
-}
-
-func (m *model) applyAgentEvent(ev agent.AgentEvent) {
-	switch ev.Kind {
-	case agent.EventKindLLM:
-		if ev.Partial {
-			m.ensureActiveModelBlock()
-			if !m.streaming {
-				m.streamPrefix = ""
-				m.streaming = true
-			}
-			m.streamPrefix += ev.Text
-			return
-		}
-		m.ensureActiveModelBlock()
-		if m.streaming {
-			m.blocks[m.modelIdx].body = m.streamPrefix + ev.Text
-			m.streaming = false
-			m.streamPrefix = ""
-		} else {
-			m.blocks[m.modelIdx].body = ev.Text
-		}
-		m.blocks[m.modelIdx].status = statusDone
-		m.blocks[m.modelIdx].expanded = true
-		m.modelIdx = -1
-
-	case agent.EventKindTool:
-		m.flushStreamToModel()
-		m.blocks = append(m.blocks, feedBlock{
-			kind:     kindTool,
-			title:    ev.ToolName,
-			status:   statusDone,
-			body:     ev.Detail,
-			expanded: defaultExpandedForTool(ev.Detail),
-			at:       time.Now(),
-		})
-		m.modelIdx = -1
-
-	case agent.EventKindInfo:
-		m.flushStreamToModel()
-		m.blocks = append(m.blocks, feedBlock{
-			kind:     kindInfo,
-			status:   statusDone,
-			body:     ev.Text,
-			expanded: true,
-			at:       time.Now(),
-		})
-
-	case agent.EventKindError:
-		m.flushStreamToModel()
-		m.blocks = append(m.blocks, feedBlock{
-			kind:     kindError,
-			status:   statusError,
-			body:     ev.Detail,
-			expanded: true,
-			at:       time.Now(),
-		})
-		m.modelIdx = -1
-
-	default:
-		m.flushStreamToModel()
-		body := fmt.Sprintf("%+v", ev)
-		m.blocks = append(m.blocks, feedBlock{
-			kind:     kindInfo,
-			status:   statusDone,
-			body:     body,
-			expanded: true,
-			at:       time.Now(),
-		})
-	}
-}
-
 func (m *model) syncViewport() {
 	w := m.width
 	if w <= 0 {
@@ -271,7 +174,6 @@ func (m *model) syncViewport() {
 	}
 	streaming := m.streaming && m.streamPrefix != ""
 	feed := renderFeed(w, m.blocks, welcomeText, streaming, m.streamPrefix, m.llmRunningTitle)
-	// Logo 放在 viewport 内与对话一起滚动，避免「Logo 在区外 + vp 高度按整屏算」导致总高度溢出、滚轮只带动局部。
 	s := LogoHeader(w) + "\n\n" + feed
 	m.vp.SetContent(s)
 	m.vp.GotoBottom()
@@ -297,25 +199,4 @@ func (m *model) View() string {
 	}
 	b.WriteString(styleHelp.Render(help))
 	return b.String()
-}
-
-// blockToggleIndex 解析折叠时间线块的按键：Alt+1..9 在任意时刻可用；纯数字 1..9 仅在
-// agent 运行中或输入框为空时可用（否则应输入到消息里）。
-func blockToggleIndex(msg tea.KeyMsg, busy bool, inputEmpty bool) (int, bool) {
-	k := tea.Key(msg)
-	if k.Type != tea.KeyRunes || len(k.Runes) != 1 {
-		return 0, false
-	}
-	r := k.Runes[0]
-	if r < '1' || r > '9' {
-		return 0, false
-	}
-	idx := int(r - '1')
-	if k.Alt {
-		return idx, true
-	}
-	if busy || inputEmpty {
-		return idx, true
-	}
-	return 0, false
 }
